@@ -33,6 +33,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DriveFile, AisaNote, Message, VoiceName } from './types';
+import { fetchDriveFiles, listNotes, createNote, updateNote, deleteNote } from './drive';
+import { chatGroundedSearch, generateTTS, transcribeAudio } from './gemini';
 
 export default function App() {
   // Auth state
@@ -137,15 +139,8 @@ export default function App() {
     if (!token) return;
     setDriveLoading(true);
     try {
-      const response = await fetch('/api/drive/files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: token, query: driveSearch }),
-      });
-      const data = await response.json();
-      if (data.files) {
-        setDriveFiles(data.files);
-      }
+      const files = await fetchDriveFiles(token, driveSearch);
+      setDriveFiles(files);
     } catch (error) {
       console.error('Failed to load Google Drive files:', error);
     } finally {
@@ -158,15 +153,8 @@ export default function App() {
     if (!token) return;
     setNotesLoading(true);
     try {
-      const response = await fetch('/api/drive/list-notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: token }),
-      });
-      const data = await response.json();
-      if (data.notes) {
-        setNotes(data.notes);
-      }
+      const dataNotes = await listNotes(token);
+      setNotes(dataNotes);
     } catch (error) {
       console.error('Failed to load notes from Drive:', error);
     } finally {
@@ -181,45 +169,22 @@ export default function App() {
     try {
       if (selectedNote) {
         // Update Note
-        const response = await fetch('/api/drive/update-note', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accessToken: token,
-            fileId: selectedNote.id,
-            title: noteTitle,
-            content: noteContent
-          }),
+        await updateNote(token, selectedNote.id, noteTitle, noteContent);
+        loadNotes();
+        // Update selected
+        setSelectedNote({
+          ...selectedNote,
+          title: noteTitle,
+          content: noteContent
         });
-        const data = await response.json();
-        if (data.success) {
-          loadNotes();
-          // Update selected
-          setSelectedNote({
-            ...selectedNote,
-            title: noteTitle,
-            content: noteContent
-          });
-        }
       } else {
         // Create Note
-        const response = await fetch('/api/drive/create-note', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accessToken: token,
-            title: noteTitle,
-            content: noteContent
-          }),
-        });
-        const data = await response.json();
-        if (data.success) {
-          loadNotes();
-          // Reset
-          setNoteTitle('');
-          setNoteContent('');
-          setSelectedNote(null);
-        }
+        await createNote(token, noteTitle, noteContent);
+        loadNotes();
+        // Reset
+        setNoteTitle('');
+        setNoteContent('');
+        setSelectedNote(null);
       }
     } catch (error) {
       console.error('Error saving note:', error);
@@ -235,22 +200,12 @@ export default function App() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch('/api/drive/delete-note', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accessToken: token,
-          fileId: noteId
-        }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        loadNotes();
-        if (selectedNote?.id === noteId) {
-          setSelectedNote(null);
-          setNoteTitle('');
-          setNoteContent('');
-        }
+      await deleteNote(token, noteId);
+      loadNotes();
+      if (selectedNote?.id === noteId) {
+        setSelectedNote(null);
+        setNoteTitle('');
+        setNoteContent('');
       }
     } catch (error) {
       console.error('Error deleting note:', error);
@@ -316,35 +271,7 @@ export default function App() {
 
     try {
       // 1. Ask model for search grounded answer with personal archives injected
-      const chatRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...(customApiKey ? { 'x-gemini-api-key': customApiKey } : {})
-        },
-        body: JSON.stringify({
-          message: userMsg,
-          history: chatMessages,
-          personalContext
-        })
-      });
-      
-      const chatData = await chatRes.json();
-      
-      if (chatData.error) {
-        const errStr = String(chatData.error).toLowerCase();
-        if (
-          errStr.includes('depleted') || 
-          errStr.includes('prepayment') || 
-          errStr.includes('billing') || 
-          errStr.includes('429') || 
-          errStr.includes('quota') || 
-          errStr.includes('exhausted')
-        ) {
-          setBillingError('Your Google AI Studio prepayment credits are depleted. Please update your billing details in Google AI Studio or configure a personal free API key in settings.');
-        }
-        throw new Error(chatData.error);
-      }
+      const chatData = await chatGroundedSearch(userMsg, chatMessages, personalContext, customApiKey);
 
       // 2. Add assistant message with citation metadata
       const aisaMessageObj: Message = {
@@ -387,32 +314,10 @@ export default function App() {
       
     setTtsPlaying(true);
     try {
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...(customApiKey ? { 'x-gemini-api-key': customApiKey } : {})
-        },
-        body: JSON.stringify({ text: cleanText, voiceName: selectedVoice }),
-      });
-      const data = await response.json();
-      if (data.error) {
-        const errStr = String(data.error).toLowerCase();
-        if (
-          errStr.includes('depleted') || 
-          errStr.includes('prepayment') || 
-          errStr.includes('billing') || 
-          errStr.includes('429') || 
-          errStr.includes('quota') || 
-          errStr.includes('exhausted')
-        ) {
-          setBillingError('Your Google AI Studio prepayment credits are depleted. Please update your billing details in Google AI Studio or configure a personal free API key in settings.');
-        }
-        throw new Error(data.error);
-      }
-      if (data.audio) {
+      const audioData = await generateTTS(cleanText, selectedVoice, customApiKey);
+      if (audioData) {
         // Decode and play in AudioContext
-        const float32Array = pcm16ToFloat32(data.audio);
+        const float32Array = pcm16ToFloat32(audioData);
         playAudioBuffer(float32Array);
       }
     } catch (error) {
@@ -538,9 +443,14 @@ export default function App() {
       nextPlayTimeRef.current = audioCtx.currentTime;
       setCallLogs(prev => [...prev, `AudioContext active (${audioCtx.state}). Connecting WebSocket...`]);
 
-      // 2. Establish connection to local proxy server WebSocket
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.host}/api/live-stream${customApiKey ? `?key=${encodeURIComponent(customApiKey)}` : ''}`;
+      // 2. Establish connection directly to Gemini Live API WebSocket
+      const apiKey = customApiKey || import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) {
+        setCallLogs(prev => [...prev, 'System Error: Gemini API Key is missing.']);
+        stopLiveCall();
+        return;
+      }
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -846,42 +756,7 @@ export default function App() {
       setProcessingStatus('Gemini transcribing spoken audio...');
 
       // Call the transcribe API
-      const response = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(customApiKey ? { 'x-gemini-api-key': customApiKey } : {})
-        },
-        body: JSON.stringify({
-          audio: base64Audio,
-          mimeType: 'audio/wav'
-        })
-      });
-
-      setRecordingProgress(85);
-      setProcessingStatus('Analyzing transcription...');
-
-      const data = await response.json();
-      
-      if (data.error) {
-        const errStr = String(data.error).toLowerCase();
-        if (
-          errStr.includes('depleted') || 
-          errStr.includes('prepayment') || 
-          errStr.includes('billing') || 
-          errStr.includes('429') || 
-          errStr.includes('quota') || 
-          errStr.includes('exhausted')
-        ) {
-          setBillingError('Your Google AI Studio prepayment credits are depleted. Please update your billing details in Google AI Studio or configure a personal free API key in settings.');
-        }
-        throw new Error(data.error);
-      }
-
-      setRecordingProgress(100);
-      setProcessingStatus('Complete!');
-
-      const transcript = data.text;
+      const transcript = await transcribeAudio(base64Audio, 'audio/wav', customApiKey);
       
       setTimeout(async () => {
         setIsProcessingAudio(false);
@@ -939,35 +814,7 @@ export default function App() {
 
     try {
       // Ask model for search grounded answer with personal archives injected
-      const chatRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...(customApiKey ? { 'x-gemini-api-key': customApiKey } : {})
-        },
-        body: JSON.stringify({
-          message: queryText,
-          history: chatMessages,
-          personalContext
-        })
-      });
-      
-      const chatData = await chatRes.json();
-      
-      if (chatData.error) {
-        const errStr = String(chatData.error).toLowerCase();
-        if (
-          errStr.includes('depleted') || 
-          errStr.includes('prepayment') || 
-          errStr.includes('billing') || 
-          errStr.includes('429') || 
-          errStr.includes('quota') || 
-          errStr.includes('exhausted')
-        ) {
-          setBillingError('Your Google AI Studio prepayment credits are depleted. Please update your billing details in Google AI Studio or configure a personal free API key in settings.');
-        }
-        throw new Error(chatData.error);
-      }
+      const chatData = await chatGroundedSearch(queryText, chatMessages, personalContext, customApiKey);
 
       // Add assistant message with citation metadata
       const aisaMessageObj: Message = {

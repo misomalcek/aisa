@@ -1,0 +1,10 @@
+{
+  "name": "Aisa Voice Assistant",
+  "description": "An elegant, voice-only conversational assistant powered by Gemini Live API and Search Grounding. Features real-time multilingual translation, Google Search grounding, and personalized context integrated with your Google Drive files and personal notes.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

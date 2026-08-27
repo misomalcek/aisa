@@ -6,6 +6,8 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    // Served from /<repo> on GitHub Pages, so assets need the prefix.
+    base: '/aisa/',
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
